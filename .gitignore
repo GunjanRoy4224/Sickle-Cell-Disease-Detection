@@ -1,0 +1,43 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual Environments
+venv/
+env/
+.env
+.venv/
+Pipfile.lock
+
+# Dataset / Data folders
+data/
+archive/
+*.csv
+*.zip
+*.tar.gz
+
+# PyTorch Model Checkpoints
+*.pth
+*.pt
+*.ckpt
+
+# Generated Output / Plots (Optional: comment out if you want to push your results)
+training_curves.png
+confusion_matrix.png
+roc_curve.png
+grad_cam_results.png
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE / OS specific files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+*.png
