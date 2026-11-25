@@ -1,90 +1,60 @@
-# Sickle Cell Disease Detection Pipeline & Clinical Dashboard
+# Sickle Cell Detection: Swin Transformer vs ResNet50
 
-## Overview
-This repository features a complete, automated deep learning workflow for identifying Sickle Cell Anaemia from blood smear microscopy images. Moving past basic accuracy metrics, our approach heavily emphasizes clinical safety, model interpretability, and optimal hyperparameter discovery. 
+Binary classification of blood-smear microscopy images with explainability (Grad-CAM) and a Streamlit demo. The project compares a Vision Transformer (Swin-Base) against a CNN baseline (ResNet50) and tunes the decision threshold toward high recall, since a missed positive is the costly error.
 
-A core goal of this project is to benchmark a cutting-edge Vision Transformer (Swin-Base) against a traditional Convolutional Neural Network (ResNet50) to see which architecture better handles the complex, irregular shapes of malformed blood cells.
+> Research demo. Not a medical device and not for diagnosis.
 
-Also included an **interactive web dashboard** to visualize real-time predictions and heatmaps!
+## Results
 
----
+Threshold selected on the **validation split** to target 95% recall; test set (57 images, 10% stratified hold-out, seed 42) used only for final evaluation. Results written to `results/metrics_<model>.json`.
 
-##  Interactive Streamlit Dashboard
-A lightweight, user-friendly clinical dashboard built with Streamlit to easily interact with the trained models. 
+| Model | Test accuracy | Positive-class F1 | ROC-AUC | Threshold (val) |
+|---|:---:|:---:|:---:|:---:|
+| Swin-Base (`swin_base_patch4_window7_224`) | 91.2% | 0.9425 | 0.921 | 0.227 |
+| ResNet50 | 91.2% | 0.9383 | 0.971 | 0.359 |
 
-### Features:
-* **Live Inference:** Upload any microscopic blood smear image to instantly get a diagnostic prediction.
-* **Model Toggle:** Seamlessly switch between the Swin Transformer and ResNet50 models.
-* **Visual Auditing (Grad-CAM):** See exactly *where* the model is looking. The dashboard generates spatial heatmaps to prove the model is focusing on cellular deformities rather than background noise.
-* **Adjustable Clinical Threshold:** A slider allows you to manually tweak the decision threshold to prioritize 95% Recall (minimizing false negatives).
+The test split is small (57 images), so a gap of a few images is within noise: treat the two models as comparable rather than ranked. ResNet50 achieves a higher ROC-AUC (0.971 vs 0.921) while Swin-Base reaches higher recall at the chosen threshold (97.6% vs 90.5%). `main.py` selects the threshold on the validation split and writes `results/metrics_<model>.json` (accuracy, precision, recall, F1, ROC-AUC, confusion matrix at the validation-selected threshold and at 0.5).
 
-### How to Run the Dashboard:
+## Method
+
+```mermaid
+flowchart LR
+    A[Kaggle dataset<br/>via kagglehub] --> B[Stratified 80/10/10 split<br/>seed 42]
+    B --> C[Optuna search<br/>lr, weight decay<br/>10 trials x 5 epochs]
+    C --> D[Final training<br/>15 epochs, AMP]
+    D --> E[Threshold for 95% recall<br/>chosen on validation]
+    E --> F[Test evaluation<br/>+ Smooth Grad-CAM]
+    F --> G[Streamlit demo]
+```
+
+- **Imbalance:** `WeightedRandomSampler` instead of synthetic oversampling.
+- **Tuning:** Optuna (TPE) with a median pruner; best validation AUC selects hyperparameters and checkpoints.
+- **Efficiency:** mixed precision (AMP) and batch size 8 so Swin-Base trains on a 4 GB GPU.
+- **Explainability:** Grad-CAM with augmentation and eigen smoothing to inspect where the model looks. Heatmaps help debugging; they do not prove clinical validity.
+
+## Quick start
+
 ```bash
-# 1. Create and activate a virtual environment (Windows example)
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-
-# 2. Install the necessary dependencies
+git clone https://github.com/GunjanRoy4224/Sickle-Cell-Disease-Detection.git
+cd Sickle-Cell-Disease-Detection
 pip install -r requirements.txt
 
-# 3. Launch the web application
-streamlit run app.py
+python main.py          # trains both models, saves weights, results/*.json and Grad-CAM figures
+streamlit run app.py    # dashboard: upload an image, switch model, adjust threshold
 ```
 
----
+The dashboard reads default thresholds from `results/thresholds.json` (written by `main.py`).
 
-## 1. Project Motivation
-When dealing with medical diagnostics—especially blood disorders like Sickle Cell Anaemia—a False Negative (missing a sick patient) can be fatal. Therefore, a diagnostic AI must do more than just score high on standard accuracy; it needs to operate within strict safety limits. This study explores whether the self-attention mechanisms of Vision Transformers offer a safer, more reliable alternative to the localized filters of standard CNNs, while enforcing rigorous audits to prevent the AI from "cheating" by memorizing irrelevant image artifacts.
-
-## 2. Technical Approach
-
-### Data Management
-* **Sourcing:** The image data is automatically fetched from the Sickle Cell Anaemia dataset via Kaggle.
-* **Handling Imbalance:** Rather than generating fake data to balance the classes (which can introduce dangerous noise), we use a dynamically computed `WeightedRandomSampler` to ensure rare classes are sampled more frequently during training.
-
-### Intelligent Hyperparameter Search
-Instead of guessing parameters, the pipeline uses **Optuna** for Bayesian optimization.
-* We actively search for the best learning rates and weight decay settings.
-* A `MedianPruner` stops bad trials early, saving massive amounts of compute time and allowing the system to run efficiently on GPUs with limited VRAM (e.g., 4GB).
-
-### Hardware Efficiency
-To make training large models like Swin-Base feasible on consumer hardware, the code heavily utilizes PyTorch Automatic Mixed Precision (AMP), gradient scaling, and aggressive memory clearing (`gc.collect()`).
-
-## 3. Prioritizing Patient Safety (Recall Optimization)
-Most out-of-the-box machine learning models split decisions down the middle at a `50%` probability. In healthcare, this is dangerous. 
-
-To fix this, we engineered a custom Precision-Recall evaluator. This script analyzes the model's performance on unseen data and recalculates the exact probability boundary needed to guarantee a **minimum 95% Recall**. This aggressively cuts down False Negatives, ensuring maximum patient safety.
-
-## 4. Model Showdown: Swin vs. ResNet
-
-The system automatically tests both architectures against a perfectly stratified hold-out dataset.
-
-| Architecture | Overall Accuracy | Positive F1-Score | Safe Decision Threshold (95% Recall) |
-| :--- | :---: | :---: | :---: |
-| **Swin Transformer (Base)** | **96.49%** | **0.9756** | **0.8950** |
-| **ResNet50 (Baseline)** | 92.98% | 0.9524 | 0.2913 |
-
-**Key Takeaways:**
-The Swin Transformer significantly outperformed the CNN in recognizing complex cellular geometries. Even better, it was highly confident: it could raise its decision threshold all the way to `0.8950` and still catch 95% of positive cases without triggering massive false alarms. To reach that same 95% safety net, the ResNet50 had to drop its threshold to a highly uncertain `0.2913`.
-
-## 5. Explainability (Grad-CAM)
-A medical AI is useless if it's looking at the wrong things (like camera glare or slide edges). 
-* We integrated **Grad-CAM** to generate heatmaps of the models' "thought process".
-* We applied Eigen and Augmentation smoothing to clean up the visual noise.
-* The resulting audits prove that our models are genuinely analyzing the sickle-shaped anomalies of the red blood cells, ensuring clinical trustworthiness.
-
-## 6. Codebase Architecture
+## Structure
 
 ```text
-sickle_cell_project/
-├── app.py                  # Interactive Streamlit Web Dashboard
-├── main.py                 # Core Orchestrator (HPO tuning & Model Showdown)
-├── requirements.txt        # Python package dependencies
-└── src/                    
-    ├── config.py           # Global settings, paths, and search spaces
-    ├── data_setup.py       # Augmentations, samplers, and dataloading
-    ├── model.py            # Model factory (using timm)
-    ├── engine.py           # Training and validation loops with AMP
-    ├── explainability.py   # Smoothed Grad-CAM visualization generation
-    └── utils.py            # Plotting and clinical threshold optimization
+main.py            tuning, training, threshold selection, evaluation
+app.py             Streamlit dashboard with Grad-CAM
+src/               config, data setup, model factory (timm), training engine, Grad-CAM, utilities
 ```
+
+## Limitations
+
+- Small test set; no cross-validation or confidence intervals yet.
+- Single public dataset; no external validation.
+- Weights are not committed; run `main.py` to produce them.

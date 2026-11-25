@@ -59,8 +59,8 @@ def get_cam_image(model, arch_name, input_tensor, display_img):
 # --- UI LAYOUT ---
 st.title("🩸 Sickle Cell Anemia Disease Detection")
 st.markdown("""
-This dashboard provides a clinical-grade diagnostic classification using Deep Learning.
-Upload a microscopic blood smear image to receive a prediction alongside a **Grad-CAM visual audit**, ensuring the model is relying on cellular anomalies rather than artifacts.
+This research demo classifies blood-smear images with deep learning. **It is not a medical device and must not be used for diagnosis.**
+Upload a microscopic blood smear image to receive a prediction alongside a **Grad-CAM visual audit**, to help inspect whether the model attends to cells rather than background artifacts.
 """)
 
 # Sidebar
@@ -70,16 +70,23 @@ selected_model = st.sidebar.selectbox(
     ("Swin Transformer (Base)", "ResNet50 (Baseline)")
 )
 
-# Default optimal thresholds based on project analysis
-default_threshold = 0.8950 if 'Swin' in selected_model else 0.2913
+# Default thresholds: written by main.py (chosen on the validation split). Legacy values are only a fallback.
+import json
+from pathlib import Path
+_thr_file = Path("results/thresholds.json")
+_thr = json.loads(_thr_file.read_text()) if _thr_file.exists() else {}
+if 'Swin' in selected_model:
+    default_threshold = _thr.get("swin_base_patch4_window7_224", 0.8950)
+else:
+    default_threshold = _thr.get("resnet50", 0.2913)
 
 decision_threshold = st.sidebar.slider(
-    "Clinical Decision Threshold (95% Recall)",
+    "Decision threshold (targets 95% recall on validation data)",
     min_value=0.0,
     max_value=1.0,
     value=default_threshold,
     step=0.01,
-    help="Adjusting this probability threshold trades off False Positives vs False Negatives. The default value shown is optimized to guarantee 95% Recall."
+    help="Adjusting this probability threshold trades off False Positives vs False Negatives. The default is chosen on the validation split to reach 95% recall; it is not a guarantee on new data."
 )
 
 st.sidebar.markdown("---")

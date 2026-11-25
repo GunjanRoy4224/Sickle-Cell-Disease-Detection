@@ -30,7 +30,7 @@ def optimize_medical_threshold(labels, probs, target_recall=0.95):
     optimal_threshold = thresholds[optimal_idx]
     
     print(f"\n--- Medical Risk Optimization ---")
-    print(f"To guarantee {target_recall*100:.0f}% Recall, shifting decision threshold from 0.50 -> {optimal_threshold:.4f}")
+    print(f"To target {target_recall*100:.0f}% recall on the data provided, shifting the decision threshold from 0.50 -> {optimal_threshold:.4f}")
     
     return optimal_threshold
 

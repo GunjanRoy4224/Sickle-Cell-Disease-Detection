@@ -1,14 +1,17 @@
+import json
 import torch
 import torch.nn as nn
 import numpy as np
 import optuna
 import gc
-from sklearn.metrics import classification_report
+from pathlib import Path
+from sklearn.metrics import (classification_report, confusion_matrix, roc_auc_score,
+                             accuracy_score, precision_score, recall_score, f1_score)
 from torch.utils.data import DataLoader
 
 from src.config import SEED, BATCH_SIZE, EPOCHS, N_TRIALS, HPO_EPOCHS, NUM_WORKERS
 from src.utils import seed_everything, plot_training_curves, evaluate_and_plot, optimize_medical_threshold
-from src.data_setup import build_loaders
+from src.data_setup import build_loaders, CellDataset
 from src.model import get_model
 from src.engine import run_epoch
 from src.explainability import generate_grad_cam
@@ -109,22 +112,54 @@ def run_pipeline_for_architecture(model_name, train_loader, val_loader, test_loa
     print(f"\nLoading best {model_name} weights for evaluation...")
     model.load_state_dict(torch.load(save_path, weights_only=True))
     
-    # --- TEST SET EVALUATION ---
+    # --- 1) THRESHOLD SELECTION: validation split only (the test split must not be used to tune anything) ---
+    val_metrics = run_epoch(model, val_loader, criterion, None, scaler, use_amp, train=False)
+    val_probs = np.array(val_metrics['y_prob'])
+    val_labels = np.array(val_metrics['y_true'])
+    optimal_threshold = float(optimize_medical_threshold(val_labels, val_probs, target_recall=0.95))
+
+    # --- 2) TEST SET EVALUATION: reported once, using the validation-selected threshold ---
     test_metrics = run_epoch(model, test_loader, criterion, None, scaler, use_amp, train=False)
     test_probs = np.array(test_metrics['y_prob'])
     test_labels = np.array(test_metrics['y_true'])
-    
-    optimal_threshold = optimize_medical_threshold(test_labels, test_probs, target_recall=0.95)
     test_preds = (test_probs >= optimal_threshold).astype(int)
+    test_preds_05 = (test_probs >= 0.5).astype(int)
 
     print('\n========================================')
-    print(f'TEST SET CLASSIFICATION REPORT ({model_name})')
+    print(f'TEST SET CLASSIFICATION REPORT ({model_name}), threshold={optimal_threshold:.4f} (chosen on validation)')
     print('========================================')
     print(classification_report(test_labels, test_preds, target_names=class_names, digits=4))
 
+    results_dir = Path("results"); results_dir.mkdir(exist_ok=True)
+    def summarize(preds):
+        return {
+            "accuracy": float(accuracy_score(test_labels, preds)),
+            "precision": float(precision_score(test_labels, preds, zero_division=0)),
+            "recall": float(recall_score(test_labels, preds)),
+            "f1": float(f1_score(test_labels, preds)),
+            "confusion_matrix": confusion_matrix(test_labels, preds).tolist(),
+        }
+    summary = {
+        "model": model_name,
+        "classes": class_names,
+        "n_test": int(len(test_labels)),
+        "roc_auc": float(roc_auc_score(test_labels, test_probs)),
+        "threshold_selected_on_validation": optimal_threshold,
+        "at_validation_threshold": summarize(test_preds),
+        "at_0.5": summarize(test_preds_05),
+        "best_hpo_params": study.best_params,
+    }
+    (results_dir / f"metrics_{model_name}.json").write_text(json.dumps(summary, indent=2))
+    thr_file = results_dir / "thresholds.json"
+    thr = json.loads(thr_file.read_text()) if thr_file.exists() else {}
+    thr[model_name] = optimal_threshold
+    thr_file.write_text(json.dumps(thr, indent=2))
+    print(f"Saved {results_dir / f'metrics_{model_name}.json'} and updated thresholds.json")
+
     # --- TRAIN SET EVALUATION ---
     print("\nEvaluating on training set...")
-    clean_train_ds = train_loader.dataset
+    # evaluate on un-augmented training images (the loader's dataset applies random augmentation)
+    clean_train_ds = CellDataset(train_loader.dataset.df, val_tfms)
     sequential_train_loader = DataLoader(clean_train_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
     
     train_metrics = run_epoch(model, sequential_train_loader, criterion, None, scaler, use_amp, train=False)
